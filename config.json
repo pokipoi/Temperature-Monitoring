@@ -1,0 +1,9 @@
+{
+    "interval_seconds": 5,
+    "monitor_components": {
+        "cpu": true,
+        "gpu": true
+    },
+    "data_file": "data.json",
+    "auto_save": true
+}

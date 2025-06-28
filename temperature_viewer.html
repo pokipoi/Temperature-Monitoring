@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>温度监控图表</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        label {
+            font-weight: bold;
+            font-size: 14px;
+        }
+        input, select, button {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+            border: none;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .chart-container {
+            position: relative;
+            height: 500px;
+            margin-bottom: 20px;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .stat-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #007bff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌡️ 温度监控图表</h1>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label>JSON文件:</label>
+                <input type="file" id="fileInput" accept=".json">
+            </div>
+            
+            <div class="control-group">
+                <label>时间范围:</label>
+                <select id="timeRange">
+                    <option value="all">全部数据</option>
+                    <option value="10">最近10分钟</option>
+                    <option value="30">最近30分钟</option>
+                    <option value="60">最近1小时</option>
+                    <option value="180">最近3小时</option>
+                    <option value="360">最近6小时</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label>显示组件:</label>
+                <div>
+                    <label><input type="checkbox" id="showCPU" checked> CPU</label>
+                    <label><input type="checkbox" id="showGPU" checked> GPU</label>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <label>数据抽样:</label>
+                <select id="dataSample">
+                    <option value="1">显示所有数据点</option>
+                    <option value="2">每2个点显示1个</option>
+                    <option value="3">每3个点显示1个</option>
+                    <option value="4">每4个点显示1个</option>
+                    <option value="6">每6个点显示1个(30秒)</option>
+                    <option value="12">每12个点显示1个(1分钟)</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label>横轴间距: <span id="xSpacingValue">5</span>分钟</label>
+                <input type="range" id="xSpacing" min="0.5" max="120" step="0.5" value="5" 
+                       oninput="document.getElementById('xSpacingValue').textContent = this.value; updateAxisSpacing();">
+            </div>
+            
+            <div class="control-group">
+                <label>Y轴最小值: <span id="yMinValue">0</span>°C</label>
+                <input type="range" id="yMin" min="0" max="50" value="0" 
+                       oninput="document.getElementById('yMinValue').textContent = this.value; updateAxisSpacing();">
+            </div>
+            
+            <div class="control-group">
+                <label>Y轴最大值: <span id="yMaxValue">100</span>°C</label>
+                <input type="range" id="yMax" min="50" max="5000" step="10" value="100" 
+                       oninput="document.getElementById('yMaxValue').textContent = this.value; updateAxisSpacing();">
+            </div>
+            
+            <button onclick="updateChart()">更新图表</button>
+            <button onclick="resetZoom()">重置缩放</button>
+            <button onclick="exportChart()">导出图片</button>
+        </div>
+        
+        <div class="chart-container">
+            <canvas id="temperatureChart"></canvas>
+        </div>
+        
+        <div class="stats" id="statsContainer"></div>
+    </div>
+
+    <script>
+        let temperatureData = [];
+        let chart = null;
+
+        // 修复插件注册方式
+        if (typeof window['chartjs-plugin-zoom'] !== 'undefined') {
+            Chart.register(window['chartjs-plugin-zoom'].default || window['chartjs-plugin-zoom']);
+        }
+
+        // 初始化图表
+        function initChart() {
+            const ctx = document.getElementById('temperatureChart').getContext('2d');
+            
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [
+                        {
+                            label: 'CPU温度',
+                            data: [],
+                            borderColor: 'rgb(54, 162, 235)',
+                            backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                            tension: 0.1,
+                            pointRadius: 2,
+                            pointHoverRadius: 5
+                        },
+                        {
+                            label: 'GPU温度',
+                            data: [],
+                            borderColor: 'rgb(255, 99, 132)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                            tension: 0.1,
+                            pointRadius: 2,
+                            pointHoverRadius: 5
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: '温度监控趋势图',
+                            font: { size: 16 }
+                        },
+                        legend: {
+                            position: 'top'
+                        },
+                        zoom: {
+                            zoom: {
+                                wheel: {
+                                    enabled: true,
+                                },
+                                pinch: {
+                                    enabled: true
+                                },
+                                mode: 'xy',
+                            },
+                            pan: {
+                                enabled: true,
+                                mode: 'xy',
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'minute',
+                                stepSize: 5,
+                                displayFormats: {
+                                    second: 'mm:ss',
+                                    minute: 'HH:mm',
+                                    hour: 'HH:mm'
+                                },
+                                minUnit: 'second'
+                            },
+                            title: {
+                                display: true,
+                                text: '时间'
+                            },
+                            ticks: {
+                                maxTicksLimit: 8,
+                                autoSkip: true,
+                                maxRotation: 45,
+                                source: 'auto',
+                                autoSkipPadding: 50
+                            },
+                            bounds: 'data',
+                            offset: true
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: '温度 (°C)'
+                            },
+                            min: 0,
+                            max: 100,
+                            ticks: {
+                                stepSize: 10
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 更新轴间距和范围
+        function updateAxisSpacing() {
+            if (!chart) return;
+            
+            const xSpacingElement = document.getElementById('xSpacing');
+            const yMinElement = document.getElementById('yMin');
+            const yMaxElement = document.getElementById('yMax');
+            
+            // 检查元素是否存在，避免null错误
+            if (!xSpacingElement || !yMinElement || !yMaxElement) {
+                console.log('轴控制元素未找到');
+                return;
+            }
+            
+            const xSpacing = parseFloat(xSpacingElement.value);
+            const yMin = parseInt(yMinElement.value);
+            const yMax = parseInt(yMaxElement.value);
+            
+            // 确保最大值大于最小值
+            if (yMax <= yMin) {
+                yMaxElement.value = yMin + 10;
+                document.getElementById('yMaxValue').textContent = yMin + 10;
+                return;
+            }
+            
+            // 更新x轴配置
+            chart.options.scales.x.time.stepSize = xSpacing;
+            
+            // 根据数据密度调整显示范围，拉宽数据点间距
+            if (temperatureData.length > 0) {
+                const dataCount = temperatureData.length;
+                const timeSpanMinutes = getTimeSpanInMinutes();
+                
+                if (timeSpanMinutes > 0) {
+                    const pointsPerMinute = dataCount / timeSpanMinutes;
+                    
+                    if (pointsPerMinute > 10) {
+                        chart.options.scales.x.time.stepSize = Math.max(xSpacing, 2);
+                        chart.options.scales.x.time.unit = 'minute';
+                    } else if (pointsPerMinute > 5) {
+                        chart.options.scales.x.time.stepSize = Math.max(xSpacing, 1);
+                        chart.options.scales.x.time.unit = 'minute';
+                    }
+                }
+            }
+            
+            // 设置刻度标签
+            chart.options.scales.x.ticks.maxTicksLimit = Math.min(10, Math.max(5, Math.floor(60 / xSpacing)));
+            
+            // 调整时间单位
+            if (xSpacing < 5) {
+                chart.options.scales.x.time.unit = 'minute';
+            } else if (xSpacing >= 60) {
+                chart.options.scales.x.time.unit = 'hour';
+                chart.options.scales.x.time.stepSize = Math.max(1, Math.round(xSpacing / 60));
+            } else {
+                chart.options.scales.x.time.unit = 'minute';
+            }
+            
+            // 更新y轴范围
+            chart.options.scales.y.min = yMin;
+            chart.options.scales.y.max = yMax;
+            
+            // 根据范围调整刻度间距
+            const range = yMax - yMin;
+            const stepSize = Math.max(1, Math.floor(range / 10));
+            chart.options.scales.y.ticks.stepSize = stepSize;
+            
+            chart.update('none');
+        }
+
+        // 获取时间跨度（分钟）
+        function getTimeSpanInMinutes() {
+            if (temperatureData.length < 2) return 0;
+            
+            const start = new Date(temperatureData[0].timestamp);
+            const end = new Date(temperatureData[temperatureData.length - 1].timestamp);
+            const diffMs = end - start;
+            return Math.floor(diffMs / (1000 * 60));
+        }
+
+        // 加载JSON文件
+        document.getElementById('fileInput').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    try {
+                        temperatureData = JSON.parse(e.target.result);
+                        updateChart();
+                        updateStats();
+                    } catch (error) {
+                        alert('JSON文件格式错误: ' + error.message);
+                    }
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        // 更新图表
+        function updateChart() {
+            if (!temperatureData.length) {
+                alert('请先加载数据文件');
+                return;
+            }
+
+            const timeRange = document.getElementById('timeRange').value;
+            const showCPU = document.getElementById('showCPU').checked;
+            const showGPU = document.getElementById('showGPU').checked;
+            
+            // 安全获取数据抽样值
+            const dataSampleElement = document.getElementById('dataSample');
+            const sampleRate = dataSampleElement ? parseInt(dataSampleElement.value) : 1;
+
+            // 过滤数据
+            let filteredData = temperatureData;
+            if (timeRange !== 'all') {
+                const cutoffTime = new Date(Date.now() - parseInt(timeRange) * 60 * 1000);
+                filteredData = temperatureData.filter(item => {
+                    return new Date(item.timestamp) >= cutoffTime;
+                });
+            }
+
+            // 数据抽样
+            if (sampleRate > 1) {
+                filteredData = filteredData.filter((item, index) => index % sampleRate === 0);
+            }
+
+            // 准备图表数据
+            const cpuData = [];
+            const gpuData = [];
+
+            filteredData.forEach(item => {
+                const timestamp = new Date(item.timestamp);
+                const temps = item.temperatures || {};
+
+                if (showCPU && temps.cpu !== undefined && temps.cpu !== null) {
+                    cpuData.push({
+                        x: timestamp,
+                        y: temps.cpu
+                    });
+                }
+
+                if (showGPU && temps.gpu !== undefined && temps.gpu !== null) {
+                    gpuData.push({
+                        x: timestamp,
+                        y: temps.gpu
+                    });
+                }
+            });
+
+            // 更新图表数据
+            chart.data.datasets[0].data = cpuData;
+            chart.data.datasets[1].data = gpuData;
+            chart.data.datasets[0].hidden = !showCPU;
+            chart.data.datasets[1].hidden = !showGPU;
+            
+            // 应用当前轴间距设置
+            updateAxisSpacing();
+            
+            chart.update();
+        }
+
+        // 更新统计信息
+        function updateStats() {
+            if (!temperatureData.length) return;
+
+            const cpuTemps = temperatureData
+                .map(item => item.temperatures?.cpu)
+                .filter(temp => temp !== undefined && temp !== null);
+            
+            const gpuTemps = temperatureData
+                .map(item => item.temperatures?.gpu)
+                .filter(temp => temp !== undefined && temp !== null);
+
+            const statsContainer = document.getElementById('statsContainer');
+            
+            let statsHTML = `
+                <div class="stat-card">
+                    <h3>📊 数据总览</h3>
+                    <p>总记录数: ${temperatureData.length}</p>
+                    <p>时间跨度: ${getTimeSpan()}</p>
+                </div>
+            `;
+
+            if (cpuTemps.length > 0) {
+                const cpuStats = calculateStats(cpuTemps);
+                statsHTML += `
+                    <div class="stat-card">
+                        <h3>🖥️ CPU温度统计</h3>
+                        <p>平均: ${cpuStats.avg.toFixed(2)}°C</p>
+                        <p>最小: ${cpuStats.min.toFixed(2)}°C</p>
+                        <p>最大: ${cpuStats.max.toFixed(2)}°C</p>
+                        <p>数据点: ${cpuStats.count}</p>
+                    </div>
+                `;
+            }
+
+            if (gpuTemps.length > 0) {
+                const gpuStats = calculateStats(gpuTemps);
+                statsHTML += `
+                    <div class="stat-card">
+                        <h3>🎮 GPU温度统计</h3>
+                        <p>平均: ${gpuStats.avg.toFixed(2)}°C</p>
+                        <p>最小: ${gpuStats.min.toFixed(2)}°C</p>
+                        <p>最大: ${gpuStats.max.toFixed(2)}°C</p>
+                        <p>数据点: ${gpuStats.count}</p>
+                    </div>
+                `;
+            }
+
+            statsContainer.innerHTML = statsHTML;
+        }
+
+        // 计算统计数据
+        function calculateStats(temps) {
+            const sum = temps.reduce((a, b) => a + b, 0);
+            return {
+                avg: sum / temps.length,
+                min: Math.min(...temps),
+                max: Math.max(...temps),
+                count: temps.length
+            };
+        }
+
+        // 获取时间跨度
+        function getTimeSpan() {
+            if (temperatureData.length < 2) return '无';
+            
+            const start = new Date(temperatureData[0].timestamp);
+            const end = new Date(temperatureData[temperatureData.length - 1].timestamp);
+            const diffMs = end - start;
+            const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+            const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+            
+            return `${diffHours}小时${diffMins}分钟`;
+        }
+
+        // 重置缩放
+        function resetZoom() {
+            if (chart) {
+                chart.resetZoom();
+            }
+        }
+
+        // 导出图片
+        function exportChart() {
+            if (chart) {
+                const url = chart.toBase64Image();
+                const link = document.createElement('a');
+                link.download = 'temperature_chart.png';
+                link.href = url;
+                link.click();
+            }
+        }
+
+        // 初始化
+        initChart();
+
+        // 修改自动加载方式，避免CORS错误
+        window.addEventListener('load', function() {
+            // 尝试自动加载data.json，但不显示错误
+            fetch('./data.json')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('文件不存在');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    temperatureData = data;
+                    updateChart();
+                    updateStats();
+                    console.log('自动加载data.json成功');
+                })
+                .catch(() => {
+                    // 静默处理错误，不显示在控制台
+                    console.log('未找到data.json文件，请使用文件上传功能');
+                });
+        });
+    </script>
+</body>
+</html>
