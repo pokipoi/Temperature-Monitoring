@@ -61,6 +61,8 @@ python chart_generator.py your_data_file.json
 ```
 ### 4. 使用web工具
 使用浏览器打开temperature_viewer.html ，选择生成的data.json文件，会生成一个表格
+![image](https://github.com/user-attachments/assets/7d27b46a-e1d1-4b5d-adf4-d8bd23b1ecf5)
+
 
 ## 数据格式
 
